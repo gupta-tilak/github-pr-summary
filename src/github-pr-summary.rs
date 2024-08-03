@@ -73,10 +73,6 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
 
             let body = e.comment.body.unwrap_or_default();
 
-            // if e.comment.performed_via_github_app.is_some() {
-            //     return;
-            // }
-            // TODO: Makeshift but operational
             if body.starts_with("Hello, I am a [PR summary agent]") {
                 log::info!("Ignore comment via bot");
                 return;
@@ -159,7 +155,6 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
     let system = &format!("You are an experienced software developer. You will act as a reviewer for a GitHub Pull Request titled \"{}\". Please be as concise as possible while being accurate.", title);
     let mut lf = LLMServiceFlows::new(&llm_api_endpoint);
     lf.set_api_key(&llm_api_key);
-    // lf.set_retry_times(3);
 
     let mut reviews: Vec<String> = Vec::new();
     let mut reviews_text = String::new();
@@ -190,50 +185,37 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
             }
             Err(e) => {
                 log::error!("LLM returned an error for commit {commit_hash}: {}", e);
+                // Log the response body for further investigation
+                if let Err(fetch_error) = lf.get_last_response_body().await {
+                    log::error!("Error fetching last response body: {}", fetch_error);
+                }
             }
         }
     }
 
-    let mut resp = String::new();
-    resp.push_str("Hello, I am a [PR summary agent](https://github.com/flows-network/github-pr-summary/) on [flows.network](https://flows.network/). Here are my reviews of code commits in this PR.\n\n------\n\n");
-    if reviews.len() > 1 {
-        log::debug!("Sending all reviews to LLM for summarization");
-        let co = ChatOptions {
-            model: Some(&llm_model_name),
-            token_limit: llm_ctx_size,
-            restart: true,
-            system_prompt: Some(system),
-            ..Default::default()
-        };
-        let question = "Here is a set of summaries for source code patches in this PR. Each summary starts with a ------ line. Write an overall summary. Present the potential issues and errors first, following by the most important findings, in your summary.\n\n".to_string() + &reviews_text;
-        match lf.chat_completion(&chat_id, &question, &co).await {
-            Ok(r) => {
-                resp.push_str(&r.choice);
-                resp.push_str("\n\n## Details\n\n");
-                log::debug!("Received the overall summary");
-            }
-            Err(e) => {
-                log::error!("LLM returned an error for the overall summary: {}", e);
-            }
+    let comment_header = "Hello, I am a [PR summary agent](https://github.com/flows-network/github-pr-summary/) on [flows.network](https://flows.network/).\n\nHere is my summary of this PR:\n\n";
+    reviews_text.insert_str(0, comment_header);
+
+    for (i, review) in reviews.iter().enumerate() {
+        let to_append = review.to_owned();
+        if reviews_text.len() + to_append.len() < ctx_size_char {
+            reviews_text.push_str(&to_append);
+            reviews_text.push_str("\n");
+        } else {
+            log::warn!("Omitting review for commit {} due to context size limit", i);
         }
-    }
-    for (_i, review) in reviews.iter().enumerate() {
-        resp.push_str(review);
     }
 
-    // Send the entire response to GitHub PR
-    // issues.create_comment(pull_number, resp).await.unwrap();
-    match issues.update_comment(comment_id, resp).await {
-        Err(error) => {
-            log::error!("Error posting resp: {}", error);
-        }
-        _ => {}
+    match issues.update_comment(comment_id, reviews_text).await {
+        Ok(_) => log::debug!("Comment updated successfully"),
+        Err(error) => log::error!("Error updating comment: {}", error),
     }
 }
 
-fn truncate(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        None => s,
-        Some((idx, _)) => &s[..idx],
+fn truncate(input: &str, max_chars: usize) -> String {
+    if input.len() > max_chars {
+        format!("{}...", &input[0..max_chars])
+    } else {
+        input.to_string()
     }
 }
