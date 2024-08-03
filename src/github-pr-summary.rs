@@ -42,10 +42,10 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
 
     //  The soft character limit of the input context size
     //  This is measured in chars. We set it to be 2x llm_ctx_size, which is measured in tokens.
-    let ctx_size_char : usize = (2 * llm_ctx_size).try_into().unwrap_or(0);
+    let ctx_size_char: usize = (2 * llm_ctx_size).try_into().unwrap_or(0);
 
     let payload = event.unwrap();
-    let mut new_commit : bool = false;
+    let mut new_commit: bool = false;
     let (title, pull_number, _contributor) = match payload.specific {
         WebhookEventPayload::PullRequest(e) => {
             if e.action == PullRequestWebhookEventAction::Opened {
@@ -119,7 +119,9 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
             }
         }
     }
-    if comment_id == 0u64.into() { return; }
+    if comment_id == 0u64.into() {
+        return;
+    }
 
     let pulls = octo.pulls(owner.clone(), repo.clone());
     let patch_as_text = pulls.get_patch(pull_number).await.unwrap();
@@ -152,7 +154,10 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
     }
 
     let chat_id = format!("PR#{pull_number}");
-    let system = &format!("You are an experienced software developer. You will act as a reviewer for a GitHub Pull Request titled \"{}\". Please be as concise as possible while being accurate.", title);
+    let system = &format!(
+        "You are an experienced software developer. You will act as a reviewer for a GitHub Pull Request titled \"{}\". Please be as concise as possible while being accurate.",
+        title
+    );
     let mut lf = LLMServiceFlows::new(&llm_api_endpoint);
     lf.set_api_key(&llm_api_key);
 
@@ -168,7 +173,7 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
             system_prompt: Some(system),
             ..Default::default()
         };
-        let question = "The following is a GitHub patch. Please summarize the key changes in concise points. Start with the most important findings.\n\n".to_string() + truncate(commit, ctx_size_char);
+        let question = "The following is a GitHub patch. Please summarize the key changes in concise points. Start with the most important findings.\n\n".to_string() + &truncate(commit, ctx_size_char);
         match lf.chat_completion(&chat_id, &question, &co).await {
             Ok(r) => {
                 if reviews_text.len() < ctx_size_char {
@@ -177,7 +182,9 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
                     reviews_text.push_str("\n");
                 }
                 let mut review = String::new();
-                review.push_str(&format!("### [Commit {commit_hash}](https://github.com/{owner}/{repo}/pull/{pull_number}/commits/{commit_hash})\n"));
+                review.push_str(&format!(
+                    "### [Commit {commit_hash}](https://github.com/{owner}/{repo}/pull/{pull_number}/commits/{commit_hash})\n"
+                ));
                 review.push_str(&r.choice);
                 review.push_str("\n\n");
                 reviews.push(review);
@@ -185,10 +192,6 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
             }
             Err(e) => {
                 log::error!("LLM returned an error for commit {commit_hash}: {}", e);
-                // Log the response body for further investigation
-                if let Err(fetch_error) = lf.get_last_response_body().await {
-                    log::error!("Error fetching last response body: {}", fetch_error);
-                }
             }
         }
     }
