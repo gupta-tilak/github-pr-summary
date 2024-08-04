@@ -155,46 +155,48 @@ async fn handler(event: Result<WebhookEvent, serde_json::Error>) {
 
     let chat_id = format!("PR#{pull_number}");
     let system = &format!(
-        "You are an experienced software developer. You will act as a reviewer for a GitHub Pull Request titled \"{}\". Please be as concise as possible while being accurate.",
-        title
-    );
-    let mut lf = LLMServiceFlows::new(&llm_api_endpoint);
-    lf.set_api_key(&llm_api_key);
+    "You are an experienced software developer with expertise in vehicle number plate detection and character extraction. You will act as a reviewer for a GitHub Pull Request titled \"{}\". Please provide a concise and accurate summary of the changes, highlighting any improvements to the number plate detection model, character extraction accuracy, or integration with other applications.",
+    title
+);
 
-    let mut reviews: Vec<String> = Vec::new();
-    let mut reviews_text = String::new();
-    for (_i, commit) in commits.iter().enumerate() {
-        let commit_hash = &commit[5..45];
-        log::debug!("Sending patch to LLM: {}", commit_hash);
-        let co = ChatOptions {
-            model: Some(&llm_model_name),
-            token_limit: llm_ctx_size,
-            restart: true,
-            system_prompt: Some(system),
-            ..Default::default()
-        };
-        let question = "The following is a GitHub patch. Please summarize the key changes in concise points. Start with the most important findings.\n\n".to_string() + &truncate(commit, ctx_size_char);
-        match lf.chat_completion(&chat_id, &question, &co).await {
-            Ok(r) => {
-                if reviews_text.len() < ctx_size_char {
-                    reviews_text.push_str("------\n");
-                    reviews_text.push_str(&r.choice);
-                    reviews_text.push_str("\n");
-                }
-                let mut review = String::new();
-                review.push_str(&format!(
-                    "### [Commit {commit_hash}](https://github.com/{owner}/{repo}/pull/{pull_number}/commits/{commit_hash})\n"
-                ));
-                review.push_str(&r.choice);
-                review.push_str("\n\n");
-                reviews.push(review);
-                log::debug!("Received LLM resp for patch: {}", commit_hash);
+let mut lf = LLMServiceFlows::new(&llm_api_endpoint);
+lf.set_api_key(&llm_api_key);
+
+let mut reviews: Vec<String> = Vec::new();
+let mut reviews_text = String::new();
+for (_i, commit) in commits.iter().enumerate() {
+    let commit_hash = &commit[5..45];
+    log::debug!("Sending patch to LLM: {}", commit_hash);
+    let co = ChatOptions {
+        model: Some(&llm_model_name),
+        token_limit: llm_ctx_size,
+        restart: true,
+        system_prompt: Some(system),
+        ..Default::default()
+    };
+    let question = "The following is a GitHub patch for a vehicle number plate detection and character extraction system. Please summarize the key changes in concise points, starting with the most important findings.\n\n".to_string() + &truncate(commit, ctx_size_char);
+    match lf.chat_completion(&chat_id, &question, &co).await {
+        Ok(r) => {
+            if reviews_text.len() < ctx_size_char {
+                reviews_text.push_str("------\n");
+                reviews_text.push_str(&r.choice);
+                reviews_text.push_str("\n");
             }
-            Err(e) => {
-                log::error!("LLM returned an error for commit {commit_hash}: {}", e);
-            }
+            let mut review = String::new();
+            review.push_str(&format!(
+                "### [Commit {commit_hash}](https://github.com/{owner}/{repo}/pull/{pull_number}/commits/{commit_hash})\n"
+            ));
+            review.push_str(&r.choice);
+            review.push_str("\n\n");
+            reviews.push(review);
+            log::debug!("Received LLM resp for patch: {}", commit_hash);
+        }
+        Err(e) => {
+            log::error!("LLM returned an error for commit {commit_hash}: {}", e);
         }
     }
+}
+
 
     let comment_header = "Hello, I am a [PR summary agent](https://github.com/flows-network/github-pr-summary/) on [flows.network](https://flows.network/).\n\nHere is my summary of this PR:\n\n";
     reviews_text.insert_str(0, comment_header);
